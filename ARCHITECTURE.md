@@ -9,14 +9,33 @@ The frontend communicates with a separate Firelink backend API server over HTTP 
 ### Firelink Ecosystem
 
 ```
-Browser  -->  OAuth Proxy  -->  Caddy Proxy (firelink-proxy)  -->  Firelink Backend API  -->  OpenShift / Bonfire
-                                          |
-                                  Caddy (this repo, static files only)
-                                          |
-                                    React SPA
+Browser  -->  OpenShift Route (:8888 TLS)
+                |
+          OAuth Proxy sidecar (:8888)          ── firelink-proxy pod ──
+                |                              |                      |
+          Caddy reverse proxy (:8000)          |  two containers in   |
+              /   \                            |  a single pod        |
+             /     \                           ── (sidecar pattern) ──
+            v       v
+  /api/*  -->  firelink-backend service  -->  OpenShift / Bonfire
+  /*      -->  firelink-frontend service      (this repo, Caddy serving static files)
+                        |
+                   React SPA
 ```
 
-The frontend is a purely client-side application. Its own Caddy instance serves the built static assets only. In production, a separate [firelink-proxy][firelink-proxy] component — an OpenShift OAuth Proxy paired with a Caddy reverse proxy — sits in front of both the frontend and backend. The proxy handles OAuth authentication and routes `/api/*` requests to the backend while forwarding all other requests to the frontend. During local development, `src/setupProxy.js` uses http-proxy-middleware to proxy API requests to a locally running backend. The backend wraps Bonfire library functions and the Kubernetes Python client, exposing them as REST and WebSocket endpoints.
+The frontend is a purely client-side application. Its own Caddy instance serves the built static
+assets only. In production, [firelink-proxy][firelink-proxy] is a single pod with two containers
+(sidecar pattern): an OpenShift OAuth Proxy listening on port 8888 (HTTPS) and a Caddy reverse
+proxy listening on port 8000 (HTTP). The OAuth Proxy handles authentication and forwards to Caddy
+over localhost. Caddy routes `/api/*` to the backend service and all other requests to this
+frontend service (it does not serve static files — it reverse-proxies to the frontend's own pod).
+See the [firelink-proxy][firelink-proxy] repository for full proxy configuration details.
+
+During local development, the backend's Caddy dev proxy (`make run-proxy` on port 8000) handles
+the same routing: `/api/*` to the Flask backend on port 5001, everything else to the React dev
+server on port 3000. `src/setupProxy.js` injects a mock `gap-auth` header to simulate the OAuth
+proxy's user identity injection. The backend wraps Bonfire library functions and the Kubernetes
+Python client, exposing them as REST and WebSocket endpoints.
 
 ## Technology Stack
 
@@ -82,7 +101,7 @@ Handles the ephemeral namespace lifecycle:
 
 - **`AppList.js`** -- Gallery view of all deployable applications. Supports text filtering and a favorites toggle.
 - **`AppListItem.js`** -- Card component for a single app with a generated gradient icon, favorite star toggle, links to the Developer Portal and resource templates, and a "Deploy" button that navigates to the deploy wizard.
-- **`AppDeploy.js`** -- (Legacy) Three-column deploy page with app selection menu, namespace selection, and deploy controller. This is an older implementation; the primary deploy flow lives in `deploy/AppDeploy.js`.
+- **`AppDeploy.js`** -- (Dead code) Three-column deploy page from an older implementation. Imports a non-existent `AppDeployControllerCard` component and would crash if rendered. No route points to this file — the primary deploy flow lives in `deploy/AppDeploy.js`.
 
 ### `deploy/` -- Deployment Wizard
 
@@ -100,7 +119,7 @@ The deployment workflow is implemented as a multi-step PatternFly Wizard:
 - **`AppDeployReview.js`** -- Summary view of all deployment options with deploy and save-as-recipe buttons.
 - **`AppDeployModal.js`** -- Triggers the deployment via WebSocket and displays real-time progress in a modal dialog.
 - **`AppDeploySaveRecipeModal.js`** -- Saves current deployment options as a named recipe to the Redux store.
-- **`AppDeployRemoveSelector.js`** -- Tree-based dual-list selector for choosing resources to remove (deprecated in favor of `ResourceSelector.js`).
+- **`AppDeployRemoveSelector.js`** -- (Dead code) Tree-based dual-list selector for choosing resources to remove. Superseded by `ResourceSelector.js` and not imported anywhere.
 
 ### `recipes/` -- Deployment Recipes
 
@@ -152,7 +171,7 @@ The frontend communicates with the Firelink backend through two mechanisms:
 
 ### REST API
 
-All REST calls go through the browser's `fetch` API to paths under `/api/firelink/`. In production, Caddy reverse-proxies these to the backend service. Key endpoints:
+All REST calls go through the browser's `fetch` API to relative paths under `/api/firelink/`. In production, the proxy's Caddy reverse-proxies these to the backend service. Key endpoints:
 
 | Method | Endpoint | Used by |
 |--------|----------|---------|
@@ -182,11 +201,22 @@ The connection is established on-demand when the user clicks "Deploy" and includ
 
 ## Authentication
 
-Authentication is handled externally by the [firelink-proxy][firelink-proxy], which runs an OpenShift OAuth Proxy. The proxy sets a `gap-auth` HTTP header containing the user's email address. The frontend reads this header by fetching `/index.html` and extracting the `gap-auth` response header value, splitting on `@` to get the username. This username becomes the `requester` identity stored in the Redux `appSlice`.
+Authentication is handled externally by the [firelink-proxy][firelink-proxy], which runs an
+OpenShift OAuth Proxy. The proxy's `-pass-user-headers=true` flag causes it to inject a `gap-auth`
+HTTP header containing the user's email address (a legacy header name from oauth2-proxy's origin as
+the Google Auth Proxy). The frontend reads this header by fetching `/index.html` and extracting the
+`gap-auth` response header value, splitting on `@` to get the username. This username becomes the
+`requester` identity stored in the Redux `appSlice` (defaulting to `"firelink-user"` if the header
+is absent).
 
-The backend has no authentication logic of its own — it trusts whatever `requester` value the frontend sends in API request payloads. All access control relies on the OAuth proxy layer in front of the application.
+The backend has no authentication logic of its own — it trusts whatever `requester` value the
+frontend sends in API request payloads. All access control relies on the OAuth proxy layer in front
+of the application.
 
-During local development, `src/setupProxy.js` injects a mock `gap-auth` header (`addrew@localhost`) into all responses so the authentication flow works without the proxy.
+During local development, `src/setupProxy.js` injects a mock `gap-auth` header
+(`addrew@localhost`) into all responses so the authentication flow works without the proxy. Note
+that `setupProxy.js` only sets this header — it does not proxy API requests. API routing during
+development is handled by the backend's Caddy dev proxy (`make run-proxy`).
 
 ## State Management
 
@@ -251,7 +281,7 @@ Images are pushed to `quay.io/redhat-user-workloads/hcm-eng-prod-tenant/firelink
 - **Polling for live data**: Resource usage components (`ResourceUsageProgress`, `TopPodsCard`) use `setInterval`-based polling (10-second intervals) rather than WebSocket subscriptions. WebSocket is reserved for the deployment flow where streaming progress updates are essential.
 - **Selective state persistence**: Only user preferences and saved recipes persist across sessions. Transient data (namespace lists, app catalogs, deployment options) is fetched fresh, avoiding stale data issues.
 - **External authentication**: The frontend delegates authentication entirely to an upstream proxy, reading identity from HTTP headers. This avoids implementing a login flow but requires the proxy infrastructure to be in place.
-- **Dual deploy interfaces**: Two deploy flows exist -- the legacy three-column layout (`src/apps/AppDeploy.js`) and the current wizard-based flow (`src/deploy/AppDeploy.js`). Both are routed, with the wizard being the primary path.
+- **Dual deploy interfaces**: Two `AppDeploy.js` files exist -- the legacy three-column layout (`src/apps/AppDeploy.js`, dead code with a broken import) and the current wizard-based flow (`src/deploy/AppDeploy.js`). Only the wizard is routed; the legacy file is unreachable.
 - **PatternFly theming**: Dark mode is implemented by toggling the `pf-v6-theme-dark` CSS class on the document root, with custom CSS in `App.css` handling logo color adjustments for light mode.
 
 [bonfire]: https://github.com/RedHatInsights/bonfire

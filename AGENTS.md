@@ -22,7 +22,7 @@ See [Development Setup][readme-dev] in the README for the full command reference
 
 ```bash
 npm install       # Install dependencies
-npm start         # Start dev server on localhost:5000
+npm start         # Start dev server on localhost:3000
 npm run build     # Production build to build/
 npm test          # Run tests (Jest via react-scripts, watch mode)
 ```
@@ -55,18 +55,19 @@ protocol, authentication flow, and deployment pipeline.
 
 ## Common Mistakes
 
-- **Dual deploy components.** Two `AppDeploy.js` files exist: `src/apps/AppDeploy.js` (legacy
-  three-column layout) and `src/deploy/AppDeploy.js` (current wizard). The wizard at
-  `src/deploy/AppDeploy.js` is the primary deploy flow — edits to the legacy version will not
-  affect the active user experience.
+- **Dual deploy components.** Two `AppDeploy.js` files exist: `src/apps/AppDeploy.js` (dead code —
+  imports a non-existent component and would crash if rendered) and `src/deploy/AppDeploy.js`
+  (current wizard). The wizard at `src/deploy/AppDeploy.js` is the primary deploy flow. No route
+  points to the legacy file.
 - **Polling vs. WebSocket confusion.** Resource usage components (`ResourceUsageProgress.js`,
   `TopPodsCard.js`) use `setInterval`-based polling (10-second cycles), not WebSocket. Only the
   deployment flow in `AppDeployModal.js` uses socket.io. Adding WebSocket subscriptions for
   resource data would require backend changes.
 - **Authentication header dependency.** The app reads user identity from a `gap-auth` HTTP header
-  injected by an upstream OAuth proxy. During local development, `src/setupProxy.js` fakes this
-  header. If the proxy middleware is misconfigured or removed, the app will fail to identify the
-  user and requests will lack a requester identity.
+  injected by the upstream OAuth proxy (an implicit behavior of the `-pass-user-headers=true` flag).
+  During local development, `src/setupProxy.js` fakes this header. If the proxy middleware is
+  misconfigured or removed, the app will fall back to the default requester `"firelink-user"` and
+  requests will lack a real user identity.
 - **Redux persistence scope.** Only `appSlice` is persisted (dark mode, favorites, recipes). The
   other three slices (`listSlice`, `appDeploySlice`, `paramSelectorSlice`) are blacklisted. Adding
   new state to `appSlice` automatically persists it — adding transient data there will cause stale

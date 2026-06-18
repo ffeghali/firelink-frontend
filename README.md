@@ -23,15 +23,16 @@ npm install
 npm start
 ```
 
-The frontend will be served on `localhost:5000`.
+The React dev server will start on `localhost:3000`.
 
 To work on the app you will need the backend running as well. Clone the
-[Firelink backend][firelink-backend], run the app, and then run the dev proxy that ensures the
-frontend and backend can talk to each other. The backend README contains instructions on how to get
-up and running.
+[Firelink backend][firelink-backend], start the backend with `make run`, and then start the dev
+proxy with `make run-proxy`. The dev proxy (Caddy on port 8000) routes `/api/*` requests to the
+backend and everything else to the frontend dev server. Open `localhost:8000` in your browser to
+use the full app. The backend README contains instructions on how to get up and running.
 
-During local development, the proxy in `src/setupProxy.js` injects a mock authentication header so
-the app works without the upstream OAuth proxy.
+During local development, `src/setupProxy.js` injects a mock `gap-auth` authentication header so
+the app identifies a user without the upstream OAuth proxy.
 
 ## Building
 
